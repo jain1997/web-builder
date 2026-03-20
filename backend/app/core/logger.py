@@ -1,22 +1,45 @@
 """
 Centralised logging configuration for the Agentic Web IDE backend.
 
-Usage in any module:
-    from app.core.logger import get_logger
-    log = get_logger(__name__)
-    log.info("message")
+Supports two modes:
+  - Development (default): colored human-readable output
+  - Production (LOG_FORMAT=json): structured JSON for log aggregation
 
-Format:
-    2024-03-15 14:23:01.456 | INFO     | planner          | Planning for: build a form...
+Correlation IDs are injected via contextvars so every log line within a
+pipeline run can be traced back to the originating request.
+
+Usage:
+    from app.core.logger import get_logger, set_correlation_id
+    log = get_logger(__name__)
+    set_correlation_id("abc123")
+    log.info("message")  # includes correlation_id in output
 """
 
+import json as _json
 import logging
+import os
 import sys
 import time
+from contextvars import ContextVar
+
+# ── Correlation ID ────────────────────────────────────────────────────
+
+_correlation_id: ContextVar[str] = ContextVar("correlation_id", default="-")
 
 
-# ── Formatter ───────────────────────────────────────────────────────
-class _Formatter(logging.Formatter):
+def set_correlation_id(cid: str) -> None:
+    """Set the correlation ID for the current async context."""
+    _correlation_id.set(cid)
+
+
+def get_correlation_id() -> str:
+    return _correlation_id.get()
+
+
+# ── Formatters ────────────────────────────────────────────────────────
+
+class _DevFormatter(logging.Formatter):
+    """Colored, human-readable output for development."""
     LEVEL_COLORS = {
         "DEBUG":    "\033[36m",   # cyan
         "INFO":     "\033[32m",   # green
@@ -30,22 +53,46 @@ class _Formatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         color  = self.LEVEL_COLORS.get(record.levelname, "")
         level  = f"{color}{record.levelname:<8}{self.RESET}"
-        # Shorten module name for readability: app.agents.planner → planner
         name   = record.name.split(".")[-1]
         name   = f"{self.BOLD}{name:<18}{self.RESET}"
         ts     = self.formatTime(record, "%Y-%m-%d %H:%M:%S")
         ms     = f"{record.msecs:03.0f}"
-        return f"{ts}.{ms} | {level} | {name} | {record.getMessage()}"
+        cid    = _correlation_id.get()
+        cid_str = f" [{cid[:8]}]" if cid != "-" else ""
+        return f"{ts}.{ms} | {level} | {name} |{cid_str} {record.getMessage()}"
 
 
-# ── Setup ────────────────────────────────────────────────────────────
+class _JSONFormatter(logging.Formatter):
+    """Structured JSON output for production log aggregation."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry = {
+            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S") + f".{record.msecs:03.0f}Z",
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "correlation_id": _correlation_id.get(),
+        }
+        if record.exc_info and record.exc_info[1]:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        return _json.dumps(log_entry)
+
+
+# ── Setup ─────────────────────────────────────────────────────────────
+
 def _setup_root_logger() -> None:
     root = logging.getLogger()
     if root.handlers:
         return  # already configured
 
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(_Formatter())
+
+    log_format = os.getenv("LOG_FORMAT", "dev").lower()
+    if log_format == "json":
+        handler.setFormatter(_JSONFormatter())
+    else:
+        handler.setFormatter(_DevFormatter())
+
     root.addHandler(handler)
     root.setLevel(logging.INFO)
 
@@ -62,7 +109,8 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
-# ── Timing helper ────────────────────────────────────────────────────
+# ── Timing helper ─────────────────────────────────────────────────────
+
 class Timer:
     """Simple context manager / manual timer that returns elapsed seconds."""
 

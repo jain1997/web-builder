@@ -5,14 +5,20 @@
 
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useIDEStore } from "@/lib/store";
 import { useChat } from "@/hooks/useChat";
 
 export default function ChatPanel() {
   const [input, setInput] = useState("");
-  const { sendPrompt } = useChat();
-  const { messages, agentSteps, isGenerating } = useIDEStore();
+  const { sendPrompt, cancel } = useChat();
+  const { messages, agentSteps, isGenerating, clearSession } = useIDEStore();
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom on new messages/steps
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length, agentSteps.length, isGenerating]);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -20,6 +26,11 @@ export default function ChatPanel() {
     sendPrompt(input.trim());
     setInput("");
   };
+
+  // Filter out heartbeat "Thinking…" noise — only keep meaningful steps
+  const meaningfulSteps = agentSteps.filter(
+    (s) => s.step && !s.step.startsWith("Thinking")
+  );
 
   return (
     <div className="flex flex-col h-full bg-[#0d1117] border-r border-[#21262d]">
@@ -29,6 +40,16 @@ export default function ChatPanel() {
         <h2 className="text-sm font-semibold text-gray-200 tracking-wide">
           AI Agent Chat
         </h2>
+        <button
+          onClick={clearSession}
+          disabled={isGenerating}
+          className="ml-auto text-[10px] uppercase tracking-wider px-2 py-1
+                     text-gray-400 hover:text-white border border-[#30363d]
+                     hover:border-gray-500 rounded transition-colors
+                     disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          New Session
+        </button>
       </div>
 
       {/* Messages */}
@@ -51,27 +72,47 @@ export default function ChatPanel() {
           </div>
         ))}
 
-        {/* Agent steps */}
-        {agentSteps.length > 0 && (
+        {/* Agent pipeline steps */}
+        {meaningfulSteps.length > 0 && (
           <div className="bg-[#161b22] rounded-xl border border-[#30363d] p-3">
             <span className="text-[10px] uppercase tracking-widest text-purple-400 block mb-2">
               Agent Pipeline
             </span>
-            {agentSteps.map((step, i) => (
-              <div
-                key={i}
-                className="flex items-start gap-2 text-xs text-gray-400 py-0.5"
-              >
-                <span className="text-purple-400 mt-0.5">▸</span>
-                <span>{step.step}</span>
-              </div>
-            ))}
+            <div className="space-y-1">
+              {meaningfulSteps.map((step, i) => {
+                const isDone = step.step.includes("✓") || step.step.includes("✓");
+                const isError = step.step.toLowerCase().includes("error") || step.step.toLowerCase().includes("failed");
+                const isImage = step.step.toLowerCase().includes("image");
+                return (
+                  <div
+                    key={i}
+                    className="flex items-start gap-2 text-xs py-0.5"
+                  >
+                    <span className={`mt-0.5 shrink-0 ${
+                      isError ? "text-red-400" :
+                      isDone ? "text-green-400" :
+                      isImage ? "text-purple-400" :
+                      "text-blue-400"
+                    }`}>
+                      {isError ? "✕" : isDone ? "✓" : isImage ? "◆" : "▸"}
+                    </span>
+                    <span className={
+                      isError ? "text-red-300" :
+                      isDone ? "text-gray-300" :
+                      "text-gray-400"
+                    }>
+                      {step.step}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
         {/* Loading indicator */}
         {isGenerating && (
-          <div className="flex items-center gap-2 text-xs text-gray-500">
+          <div className="flex items-center gap-2 text-xs text-gray-500 py-1">
             <div className="flex gap-1">
               <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce [animation-delay:0ms]" />
               <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce [animation-delay:150ms]" />
@@ -80,6 +121,8 @@ export default function ChatPanel() {
             <span>Agents working…</span>
           </div>
         )}
+
+        <div ref={bottomRef} />
       </div>
 
       {/* Input */}
@@ -96,15 +139,26 @@ export default function ChatPanel() {
                        focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50
                        disabled:opacity-50 transition-colors"
           />
-          <button
-            type="submit"
-            disabled={isGenerating || !input.trim()}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700
-                       text-white text-sm font-medium rounded-lg
-                       transition-colors disabled:cursor-not-allowed"
-          >
-            Send
-          </button>
+          {isGenerating ? (
+            <button
+              type="button"
+              onClick={cancel}
+              className="px-4 py-2 bg-red-600 hover:bg-red-500
+                         text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={!input.trim()}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700
+                         text-white text-sm font-medium rounded-lg
+                         transition-colors disabled:cursor-not-allowed"
+            >
+              Send
+            </button>
+          )}
         </div>
       </form>
     </div>

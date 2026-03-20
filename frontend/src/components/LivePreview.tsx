@@ -23,7 +23,8 @@ function SandpackErrorWatcher() {
   const setCompilationErrors = useIDEStore((s) => s.setCompilationErrors);
 
   useEffect(() => {
-    return listen((msg: any) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return listen((msg: Record<string, any>) => {
       // Only capture errors — never clear on "start" here.
       // Clearing on every bundler "start" event causes rapid set/clear cycles
       // that make the error overlay blink. Errors are cleared in sendPrompt
@@ -82,6 +83,7 @@ export default function LivePreview() {
         <button
           onClick={handleOpenInNewTab}
           disabled={opening || Object.keys(files).length === 0}
+          suppressHydrationWarning
           title="Open in new tab"
           className="text-gray-500 hover:text-gray-200 disabled:opacity-30 transition-colors"
         >
@@ -107,7 +109,6 @@ export default function LivePreview() {
                 "lucide-react": "latest",
                 "clsx": "latest",
                 "tailwind-merge": "latest",
-                "react-router-dom": "^6",
                 "react-hook-form": "latest",
                 "framer-motion": "latest",
                 "date-fns": "latest",

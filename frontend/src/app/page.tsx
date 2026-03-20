@@ -16,6 +16,7 @@ import {
 import dynamic from "next/dynamic";
 
 import ChatPanel from "@/components/ChatPanel";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import LivePreview from "@/components/LivePreview";
 import { useChat } from "@/hooks/useChat";
 import { useIDEStore } from "@/lib/store";
@@ -40,10 +41,16 @@ export default function IDEPage() {
     isGenerating,
     compilationErrors,
     addMessage,
+    hydrateFromStorage,
   } = useIDEStore();
 
   const { sendPrompt } = useChat();
   const autoFixedRef = useRef(false);
+
+  // Hydrate persisted state from localStorage after mount (avoids SSR mismatch)
+  useEffect(() => {
+    hydrateFromStorage();
+  }, [hydrateFromStorage]);
 
   // Reset auto-fix guard whenever a new generation starts
   useEffect(() => {
@@ -56,7 +63,7 @@ export default function IDEPage() {
       try {
         let templateFiles: FileTree;
         try {
-          const res = await fetch(`${API_URL}/api/template`);
+          const res = await fetch(`${API_URL}/v1/template`);
           if (!res.ok) throw new Error(`Server returned ${res.status}`);
           const data = await res.json();
           templateFiles = data.files || {};
@@ -142,21 +149,27 @@ export default function IDEPage() {
         <PanelGroup direction="horizontal">
           {/* ── Left: Chat panel ──────────────────────────────── */}
           <Panel defaultSize={22} minSize={15} maxSize={40}>
-            <ChatPanel />
+            <ErrorBoundary fallbackLabel="Chat">
+              <ChatPanel />
+            </ErrorBoundary>
           </Panel>
 
           <PanelResizeHandle className="w-[3px] bg-[#21262d] hover:bg-blue-500 transition-colors cursor-col-resize" />
 
           {/* ── Center: Live Preview ──────────────────────────── */}
           <Panel defaultSize={45} minSize={25}>
-            <LivePreview />
+            <ErrorBoundary fallbackLabel="Preview">
+              <LivePreview />
+            </ErrorBoundary>
           </Panel>
 
           <PanelResizeHandle className="w-[3px] bg-[#21262d] hover:bg-blue-500 transition-colors cursor-col-resize" />
 
           {/* ── Right: Editor ───────────────────────── */}
           <Panel defaultSize={33} minSize={20}>
-            <CodeEditor />
+            <ErrorBoundary fallbackLabel="Editor">
+              <CodeEditor />
+            </ErrorBoundary>
           </Panel>
         </PanelGroup>
       </div>

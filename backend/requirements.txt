@@ -1,11 +1,14 @@
 fastapi
 uvicorn[standard]
-websockets
+sse-starlette
 python-dotenv
 langgraph
 langchain-openai
 langchain-core
 pydantic
+pydantic-settings
 httpx
+redis
+aiosqlite
 pytest
 pytest-asyncio

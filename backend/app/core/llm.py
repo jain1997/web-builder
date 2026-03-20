@@ -42,9 +42,9 @@ def get_llm(
 
     if provider == "openai":
         if model_tier == "large":
-            model_name = settings.LLM_MODEL
+            model_name = settings.LLM_MODEL          # gpt-5.1 — planning, brief tasks
         elif model_tier == "small":
-            model_name = "gpt-5-mini-2025-08-07"
+            model_name = settings.LLM_MODEL_SMALL     # gpt-5-mini — exhaustive code gen
         else:
             raise ValueError(f"Unsupported model_tier: '{model_tier}'. Use 'large' or 'small'.")
 
