@@ -4,6 +4,9 @@
  * Persists files and messages to localStorage so a page refresh
  * doesn't lose work. Transient state (agent steps, generating flag,
  * errors) is NOT persisted.
+ *
+ * Hydration from localStorage is deferred to after mount via
+ * `hydrateFromStorage()` to avoid SSR/client hydration mismatches.
  */
 
 import { create } from "zustand";
@@ -46,6 +49,9 @@ export interface IDEState {
   // Errors
   compilationErrors: string[];
 
+  // Whether localStorage state has been loaded
+  _hydrated: boolean;
+
   // Actions
   addMessage: (msg: Omit<ChatMessage, "id" | "timestamp">) => void;
   addAgentStep: (step: Omit<AgentStep, "timestamp">) => void;
@@ -58,6 +64,8 @@ export interface IDEState {
   setGenerating: (generating: boolean) => void;
   clearAgentSteps: () => void;
   setCompilationErrors: (errors: string[]) => void;
+  hydrateFromStorage: () => void;
+  clearSession: () => void;
 }
 
 // ── LocalStorage persistence helpers ─────────────────────────────
@@ -72,11 +80,11 @@ interface PersistedState {
 }
 
 function loadPersistedState(): Partial<PersistedState> {
+  if (typeof window === "undefined") return {};
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as PersistedState;
-    // Only restore if there are actual files (not just the template)
     if (parsed.files && Object.keys(parsed.files).length > 0) {
       return parsed;
     }
@@ -87,11 +95,12 @@ function loadPersistedState(): Partial<PersistedState> {
 }
 
 function persistState(state: IDEState) {
+  if (typeof window === "undefined") return;
   try {
     const toSave: PersistedState = {
       files: state.files,
       previousFiles: state.previousFiles,
-      messages: state.messages.slice(-50), // Keep last 50 messages only
+      messages: state.messages.slice(-50),
       activeFile: state.activeFile,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
@@ -102,18 +111,48 @@ function persistState(state: IDEState) {
 
 // ── Store ──────────────────────────────────────────────────────────
 
-const persisted = loadPersistedState();
-
 export const useIDEStore = create<IDEState>((set, get) => ({
-  messages: persisted.messages || [],
+  // Initialize empty — matching SSR output. Hydrate after mount.
+  messages: [],
   agentSteps: [],
-  files: persisted.files || {},
-  activeFile: persisted.activeFile || "src/App.tsx",
-  previousFiles: persisted.previousFiles || {},
+  files: {},
+  activeFile: "App.tsx",
+  previousFiles: {},
   previewUrl: "",
   isPreviewReady: false,
   isGenerating: false,
   compilationErrors: [],
+  _hydrated: false,
+
+  hydrateFromStorage: () => {
+    if (get()._hydrated) return;
+    const persisted = loadPersistedState();
+    set({
+      messages: persisted.messages || [],
+      files: persisted.files || {},
+      activeFile: persisted.activeFile || "App.tsx",
+      previousFiles: persisted.previousFiles || {},
+      _hydrated: true,
+    });
+  },
+
+  clearSession: () => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem("agentic_session_id");
+    }
+    set({
+      messages: [],
+      agentSteps: [],
+      files: {},
+      activeFile: "App.tsx",
+      previousFiles: {},
+      previewUrl: "",
+      isPreviewReady: false,
+      isGenerating: false,
+      compilationErrors: [],
+    });
+  },
 
   addMessage: (msg) =>
     set((s) => {

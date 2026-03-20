@@ -22,8 +22,8 @@ RULES:
 - Each description MUST mention what the file imports from other files in the plan,
   so generators can write correct import paths without seeing each other's code.
 - Tailwind CSS is loaded via CDN — no config files needed.
-- For 3D/animated websites: use three, @react-three/fiber (Canvas, useFrame), and @react-three/drei
-  (OrbitControls, Text, Float, Stars, MeshDistortMaterial, etc.). Put 3D scenes in dedicated components.
+- DO NOT plan 3D components — no three.js, @react-three/fiber, or @react-three/drei.
+  Use CSS animations, Tailwind transitions, or framer-motion instead for visual effects.
 
 IMAGE GENERATION:
 - If the website would benefit from images, include an "images" array in your response.

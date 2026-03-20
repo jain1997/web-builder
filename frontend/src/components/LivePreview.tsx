@@ -82,6 +82,7 @@ export default function LivePreview() {
         <button
           onClick={handleOpenInNewTab}
           disabled={opening || Object.keys(files).length === 0}
+          suppressHydrationWarning
           title="Open in new tab"
           className="text-gray-500 hover:text-gray-200 disabled:opacity-30 transition-colors"
         >
@@ -107,16 +108,12 @@ export default function LivePreview() {
                 "lucide-react": "latest",
                 "clsx": "latest",
                 "tailwind-merge": "latest",
-                "react-router-dom": "^6",
                 "react-hook-form": "latest",
                 "framer-motion": "latest",
                 "date-fns": "latest",
                 "react-icons": "latest",
                 "@headlessui/react": "latest",
                 "recharts": "latest",
-                "three": "latest",
-                "@react-three/fiber": "latest",
-                "@react-three/drei": "latest",
               },
             }}
           >

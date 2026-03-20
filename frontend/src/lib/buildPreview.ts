@@ -1,43 +1,17 @@
 /**
  * buildPreview — Opens the generated website in a new browser tab.
  *
- * WHY THE OLD APPROACH FAILED:
- *   ES module `import` statements inside a blob: URL document cannot import
- *   other blob: URLs because the new-tab document has a null/opaque origin,
- *   and importing a blob: URL created from localhost is cross-origin → blocked.
- *
- * NEW APPROACH:
- *   1. Babel-transpile all .tsx/.ts files to CommonJS (require/exports).
- *   2. Inline every compiled module as a classic <script> tag.
- *   3. A tiny __require() polyfill resolves relative paths and maps known
- *      packages to UMD globals (React/ReactDOM from unpkg CDN) or lightweight
- *      stubs (lucide-react, framer-motion, etc.).
- *   4. Everything lives in one HTML blob → zero cross-origin issues.
+ * Uses sucrase (bundled, no CDN) to transpile TSX/TS → CommonJS,
+ * then assembles everything into a single HTML blob with:
+ *   - React + ReactDOM from CDN (UMD globals)
+ *   - Tailwind CSS from CDN
+ *   - Lightweight stubs for external packages (lucide, framer-motion, etc.)
+ *   - A tiny __require() polyfill for module resolution
  */
 
-// ── Babel loader (singleton) ──────────────────────────────────────────────────
-let babelPromise: Promise<any> | null = null;
-
-function loadBabel(): Promise<any> {
-  if ((window as any).Babel) return Promise.resolve((window as any).Babel);
-  if (babelPromise) return babelPromise;
-  babelPromise = new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = "https://unpkg.com/@babel/standalone/babel.min.js";
-    s.onload = () => resolve((window as any).Babel);
-    s.onerror = reject;
-    document.head.appendChild(s);
-  });
-  return babelPromise;
-}
+import { transform } from "sucrase";
 
 // ── Inline JS that provides stubs for external packages ───────────────────────
-// React + ReactDOM come from UMD CDN scripts loaded in <head>.
-// Everything else gets a lightweight stub so the page renders without crashing.
-// NOTE: Every stub must have __esModule:true so Babel's _interopRequireDefault /
-// _interopRequireWildcard helpers pass them through without double-wrapping.
-// Without it: stub {default:fn} → interop wraps again → {default:{default:fn}}
-// → _pkg.default is an object, not a function → runtime error.
 const EXTERNALS_SCRIPT = `
 function __mkIcon(name) {
   return function Icon(props) {
@@ -61,12 +35,11 @@ var __externals = {
   "react-dom/client": {
     __esModule: true,
     createRoot: function(el) {
-      return { render: function(vnode) { window.ReactDOM.render(vnode, el); } };
+      return { render: function(vnode) { window.ReactDOM.createRoot(el).render(vnode); } };
     },
-    default: { createRoot: function(el) { return { render: function(vnode) { window.ReactDOM.render(vnode, el); } }; } }
+    default: { createRoot: function(el) { return window.ReactDOM.createRoot(el); } }
   },
 
-  // lucide-react — every named export is an SVG icon stub
   "lucide-react": new Proxy({ __esModule: true }, {
     get: function(target, name) {
       if (name === "__esModule") return true;
@@ -74,15 +47,12 @@ var __externals = {
     }
   }),
 
-  // clsx — default export is the join function
   "clsx": { __esModule: true, default: __clsx },
 
-  // tailwind-merge — default + named twMerge both work
   "tailwind-merge": { __esModule: true, default: __clsx, twMerge: __clsx, cn: __clsx },
 
-  // framer-motion — motion.* renders as plain HTML elements; animation props stripped
   "framer-motion": (function() {
-    var ANIM_PROPS = ["initial","animate","exit","variants","transition","whileHover","whileTap","layout","layoutId"];
+    var ANIM_PROPS = ["initial","animate","exit","variants","transition","whileHover","whileTap","whileInView","layout","layoutId"];
     var motionProxy = new Proxy({}, {
       get: function(_, tag) {
         return React.forwardRef(function(props, ref) {
@@ -98,11 +68,12 @@ var __externals = {
       AnimatePresence: function(p) { return (p && p.children) || null; },
       useAnimation:    function() { return { start: function(){}, stop: function(){} }; },
       useMotionValue:  function(v) { return { get: function(){ return v; }, set: function(){} }; },
-      useTransform:    function(v, fn) { return { get: function(){ return fn ? fn(v.get()) : v.get(); } }; }
+      useTransform:    function(v, fn) { return { get: function(){ return fn ? fn(v.get()) : v.get(); } }; },
+      useInView:       function() { return true; },
+      useScroll:       function() { return { scrollY: { get: function(){ return 0; } }, scrollYProgress: { get: function(){ return 0; } } }; }
     };
   })(),
 
-  // react-hook-form
   "react-hook-form": {
     __esModule: true,
     useForm: function() {
@@ -124,15 +95,13 @@ var __externals = {
     default: {}
   },
 
-  // date-fns
   "date-fns": {
     __esModule: true,
-    format:   function(d, fmt) { try { return new Date(d).toLocaleDateString(); } catch(e){ return String(d); } },
+    format:   function(d) { try { return new Date(d).toLocaleDateString(); } catch(e){ return String(d); } },
     parseISO: function(s) { return new Date(s); },
     default:  {}
   },
 
-  // @headlessui/react — render children passthrough
   "@headlessui/react": new Proxy({ __esModule: true }, {
     get: function(target, key) {
       if (key === "__esModule") return true;
@@ -140,7 +109,6 @@ var __externals = {
     }
   }),
 
-  // react-icons/* — every sub-path returns icon stubs
   "react-icons":       new Proxy({ __esModule: true }, { get: function(){ return new Proxy({ __esModule: true }, { get: function(_, k){ return __mkIcon(k); } }); } }),
   "react-icons/fa":    new Proxy({ __esModule: true }, { get: function(_, k){ return __mkIcon(k); } }),
   "react-icons/fi":    new Proxy({ __esModule: true }, { get: function(_, k){ return __mkIcon(k); } }),
@@ -150,7 +118,6 @@ var __externals = {
   "react-icons/io":    new Proxy({ __esModule: true }, { get: function(_, k){ return __mkIcon(k); } }),
   "react-icons/ai":    new Proxy({ __esModule: true }, { get: function(_, k){ return __mkIcon(k); } }),
 
-  // recharts — render a placeholder div for each chart component
   "recharts": new Proxy({ __esModule: true }, {
     get: function(target, key) {
       if (key === "__esModule") return true;
@@ -159,43 +126,6 @@ var __externals = {
           style: { background: "#f8f9fa", border: "1px dashed #ccc", padding: "1.5rem", borderRadius: "0.5rem", textAlign: "center", color: "#888", fontSize: "0.875rem" }
         }, String(key) + " chart");
       };
-    }
-  }),
-
-  // three / @react-three/fiber / @react-three/drei — 3D needs real WebGL,
-  // so in the new-tab blob preview we show a placeholder instead of crashing.
-  "three": new Proxy({ __esModule: true, default: {} }, {
-    get: function(target, key) {
-      if (key === "__esModule") return true;
-      if (key === "default") return {};
-      return function ThreeStub() {};
-    }
-  }),
-  "@react-three/fiber": {
-    __esModule: true,
-    Canvas: function CanvasFallback(props) {
-      return React.createElement("div", {
-        style: { background: "linear-gradient(135deg, #1a1a2e, #16213e)", border: "1px dashed #4a5568",
-                 borderRadius: "0.75rem", padding: "2rem", textAlign: "center", color: "#a0aec0",
-                 minHeight: "300px", display: "flex", flexDirection: "column",
-                 alignItems: "center", justifyContent: "center", gap: "0.5rem" }
-      },
-        React.createElement("div", { style: { fontSize: "2rem" } }, "\uD83C\uDFB2"),
-        React.createElement("div", { style: { fontWeight: 600, color: "#e2e8f0" } }, "3D Scene"),
-        React.createElement("div", { style: { fontSize: "0.75rem" } },
-          "3D rendering is available in the Sandpack preview. Open the IDE to interact with this scene.")
-      );
-    },
-    useFrame: function() {},
-    useThree: function() { return { gl: {}, scene: {}, camera: {}, size: { width: 800, height: 600 } }; },
-    useLoader: function() { return {}; },
-    default: {}
-  },
-  "@react-three/drei": new Proxy({ __esModule: true }, {
-    get: function(target, key) {
-      if (key === "__esModule") return true;
-      // OrbitControls, Text, etc. — render nothing
-      return function DreiStub(props) { return (props && props.children) || null; };
     }
   })
 };
@@ -229,11 +159,9 @@ function __findKey(path) {
 
 function __makeRequire(fromPath) {
   return function __require(path) {
-    // External package
     if (Object.prototype.hasOwnProperty.call(__externals, path)) {
       return __externals[path];
     }
-    // Resolve relative path
     var resolved = path.startsWith(".") ? __resolveRelative(fromPath, path) : path;
     var key = __findKey(resolved);
     if (!key) {
@@ -242,7 +170,7 @@ function __makeRequire(fromPath) {
     }
     if (__cache[key]) return __cache[key];
     var mod = { exports: {} };
-    __cache[key] = mod.exports;          // set before exec to handle circular deps
+    __cache[key] = mod.exports;
     __modules[key](mod, mod.exports, __makeRequire(key));
     __cache[key] = mod.exports;
     return mod.exports;
@@ -257,8 +185,12 @@ const MOUNT_SCRIPT = `
     var appExports = __makeRequire("")("App.tsx");
     var App = appExports.default || appExports;
     if (typeof App !== "function") throw new Error("App.tsx did not export a default function. Got: " + typeof App);
-    var root = document.getElementById("root");
-    ReactDOM.render(React.createElement(App), root);
+    var container = document.getElementById("root");
+    if (ReactDOM.createRoot) {
+      ReactDOM.createRoot(container).render(React.createElement(App));
+    } else {
+      ReactDOM.render(React.createElement(App), container);
+    }
   } catch (err) {
     document.getElementById("root").innerHTML =
       '<div style="color:#c00;background:#fee;padding:20px;font-family:monospace;white-space:pre-wrap">' +
@@ -272,8 +204,6 @@ const MOUNT_SCRIPT = `
 export async function openPreviewInNewTab(
   rawFiles: Record<string, string>
 ): Promise<void> {
-  const Babel = await loadBabel();
-
   // Normalize leading slashes
   const files: Record<string, string> = {};
   for (const [p, code] of Object.entries(rawFiles)) {
@@ -287,41 +217,50 @@ export async function openPreviewInNewTab(
 
   // ── Separate code files from image data URIs ────────────────────────────────
   const codeFiles: Record<string, string> = {};
-  const imageFiles: Record<string, string> = {};
   for (const [path, content] of Object.entries(files)) {
-    if (content.startsWith("data:image/")) {
-      imageFiles[path] = content;
-    } else {
+    if (!content.startsWith("data:image/")) {
       codeFiles[path] = content;
     }
   }
 
-  // ── Transpile code to CommonJS (skip images) ──────────────────────────────
+  // ── Transpile TSX/TS → CommonJS with sucrase ──────────────────────────────
   const compiled: Record<string, string> = {};
   for (const [path, code] of Object.entries(codeFiles)) {
     try {
-      compiled[path] = Babel.transform(code, {
-        presets: [
-          // runtime:"classic" so JSX becomes React.createElement (React is a UMD global)
-          ["react", { runtime: "classic" }],
-          ["typescript", { allExtensions: true, isTSX: true }],
-          // env preset converts ES module import/export → CommonJS require/exports
-          ["env", { modules: "commonjs", targets: { browsers: ["last 2 Chrome versions"] } }],
-        ],
-        filename: path,
-        compact: false, // prevent deopt warnings on large files with inlined base64 images
+      // Extract data URIs before transpilation (huge base64 strings slow things down)
+      const dataUriMap: Record<string, string> = {};
+      let idx = 0;
+      const safeCode = code.replace(
+        /data:image\/[^"'`\s]+/g,
+        (match) => {
+          const key = `__DATA_URI_${idx++}__`;
+          dataUriMap[key] = match;
+          return key;
+        }
+      );
+
+      let result = transform(safeCode, {
+        transforms: ["typescript", "jsx", "imports"],
+        jsxRuntime: "classic",
+        jsxPragma: "React.createElement",
+        jsxFragmentPragma: "React.Fragment",
+        filePath: path,
       }).code;
+
+      // Restore data URIs
+      for (const [key, uri] of Object.entries(dataUriMap)) {
+        result = result.replaceAll(key, uri);
+      }
+
+      compiled[path] = result;
     } catch (err: any) {
       console.warn(`[buildPreview] transpile failed for ${path}:`, err);
-      // Emit a module that throws so the error appears at runtime
       compiled[path] =
-        `exports.default = function() { throw new Error(${JSON.stringify("Compile error in " + path + ": " + (err.message ?? err))}); };`;
+        `exports.default = function() { return React.createElement("div", {style:{color:"#c00",background:"#fee",padding:"20px",fontFamily:"monospace",whiteSpace:"pre-wrap"}}, "Compile error in ${path}:\\n" + ${JSON.stringify(err.message ?? String(err))}); };`;
     }
   }
 
   // ── Build one <script> per module ───────────────────────────────────────────
-  // Each module is wrapped in a factory: function(module, exports, require){...}
-  // <\/script> inside code would break the surrounding <script> tag, so escape it.
   const moduleScripts = Object.entries(compiled)
     .map(([path, code]) => {
       const safeCode = code.replace(/<\/script>/gi, "<\\/script>");
@@ -339,10 +278,8 @@ export async function openPreviewInNewTab(
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Preview — Agentic Web IDE</title>
-  <!-- React + ReactDOM UMD (provides window.React and window.ReactDOM) -->
-  <script src="https://unpkg.com/react@18/umd/react.development.js"><\/script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script>
-  <!-- Tailwind CSS -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"><\/script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"><\/script>
   <script src="https://cdn.tailwindcss.com"><\/script>
 </head>
 <body>
@@ -351,7 +288,7 @@ export async function openPreviewInNewTab(
   <!-- 1. External package stubs -->
   <script>${EXTERNALS_SCRIPT}<\/script>
 
-  <!-- 2. Module system (require / define) -->
+  <!-- 2. Module system -->
   <script>${MODULE_SYSTEM_SCRIPT}<\/script>
 
   <!-- 3. Compiled app modules -->

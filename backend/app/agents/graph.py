@@ -43,7 +43,7 @@ async def assembler_node(state: AgentState) -> dict:
     for part in image_parts:
         merged_images.update(part)
 
-    # Inline image data URIs into code — replace path references with actual base64
+    # Inline image data URIs into code — Sandpack can't fetch external URLs
     if merged_images:
         existing_code = state.get("generated_files", {})
         all_code = {**existing_code, **merged_files}
@@ -66,7 +66,9 @@ async def assembler_node(state: AgentState) -> dict:
                 merged_files[file_path] = code
 
     existing = state.get("generated_files", {})
-    final = {**existing, **merged_files, **merged_images}
+    # Merge code files but exclude image entries (images/ paths) from the
+    # file set sent to the frontend — Sandpack only needs .tsx/.ts files.
+    final = {k: v for k, v in {**existing, **merged_files}.items() if not k.startswith("images/")}
 
     log.info(
         f"Assembled {len(merged_files)} file(s) + {len(merged_images)} image(s) "

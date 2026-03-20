@@ -131,7 +131,9 @@ export function useChat() {
           buffer += decoder.decode(value, { stream: true });
 
           // Split on double newline (SSE event boundary)
-          const parts = buffer.split("\n\n");
+          // sse-starlette uses \r\n line endings, so normalise first
+          const normalized = buffer.replace(/\r\n/g, "\n");
+          const parts = normalized.split("\n\n");
           // Keep the last partial chunk in the buffer
           buffer = parts.pop() || "";
 

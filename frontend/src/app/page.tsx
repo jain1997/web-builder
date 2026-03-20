@@ -41,10 +41,16 @@ export default function IDEPage() {
     isGenerating,
     compilationErrors,
     addMessage,
+    hydrateFromStorage,
   } = useIDEStore();
 
   const { sendPrompt } = useChat();
   const autoFixedRef = useRef(false);
+
+  // Hydrate persisted state from localStorage after mount (avoids SSR mismatch)
+  useEffect(() => {
+    hydrateFromStorage();
+  }, [hydrateFromStorage]);
 
   // Reset auto-fix guard whenever a new generation starts
   useEffect(() => {

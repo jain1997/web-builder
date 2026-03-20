@@ -2,10 +2,12 @@
 Image Generator Agent.
 
 One instance runs per image, all in parallel via LangGraph's Send API.
-Calls local Ollama text-to-image model, saves PNG to disk, and returns
-a URL path so generated code can reference it via <img src="...">.
+Supports two providers:
+  - OpenAI (gpt-image-1 / DALL-E 3) — fast, high quality, uses API credits
+  - Ollama (local Flux2) — free, slower, requires local GPU
 
-Reports errors visibly in agent steps so the user can see what failed.
+Saves PNGs to disk and returns inline data URIs for Sandpack rendering.
+Falls back to placehold.co on failure so the layout never breaks.
 """
 
 import base64
@@ -19,26 +21,62 @@ from app.core.logger import get_logger, Timer
 
 log = get_logger(__name__)
 
-# 1x1 transparent PNG — used when image generation fails so code doesn't break.
-_PLACEHOLDER_B64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAB"
-    "Nl7BcQAAAABJRU5ErkJggg=="
-)
-_PLACEHOLDER_URI = f"data:image/png;base64,{_PLACEHOLDER_B64}"
+
+def _placeholder_url(image_path: str) -> str:
+    """Visible placeholder URL when image generation fails."""
+    name = Path(image_path).stem.replace("-", " ").replace("_", " ").title()
+    safe_name = name.replace(" ", "+")
+    return f"https://placehold.co/600x400/1e293b/94a3b8?text={safe_name}"
 
 
-def _save_image(session_id: str, image_path: str, b64_data: str) -> str:
-    """Save base64 PNG to disk and return the public URL."""
+def _save_image(session_id: str, image_path: str, b64_data: str) -> None:
+    """Save base64 PNG to disk for persistence."""
     storage_dir = Path(settings.IMAGE_STORAGE_PATH) / session_id
     storage_dir.mkdir(parents=True, exist_ok=True)
-
-    # image_path is like "images/hero.png" — extract filename
     filename = Path(image_path).name
     file_on_disk = storage_dir / filename
     file_on_disk.write_bytes(base64.b64decode(b64_data))
 
-    # Return URL the frontend can fetch
-    return f"{settings.PUBLIC_URL}/api/images/{session_id}/{filename}"
+
+async def _generate_openai(prompt: str) -> str:
+    """Generate image via OpenAI Images API. Returns base64 PNG."""
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(
+            "https://api.openai.com/v1/images/generations",
+            headers={
+                "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": settings.IMAGE_MODEL,
+                "prompt": prompt,
+                "n": 1,
+                "size": settings.IMAGE_SIZE,
+                "quality": settings.IMAGE_QUALITY,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["data"][0]["b64_json"]
+
+
+async def _generate_ollama(prompt: str) -> str:
+    """Generate image via local Ollama. Returns base64 PNG."""
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        resp = await client.post(
+            f"{settings.OLLAMA_BASE_URL}/api/generate",
+            json={
+                "model": settings.IMAGE_MODEL,
+                "prompt": prompt,
+                "stream": False,
+            },
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        image_b64 = result.get("image", "")
+        if not image_b64:
+            raise ValueError("Ollama returned empty image data")
+        return image_b64
 
 
 async def image_generator_node(state: AgentState) -> dict:
@@ -46,71 +84,62 @@ async def image_generator_node(state: AgentState) -> dict:
     image_path = current_image.get("path", "images/unknown.png")
     prompt = current_image.get("prompt", "")
     session_id = state.get("session_id", "default")
+    provider = settings.IMAGE_PROVIDER.lower()
 
-    log.info(f"Generating image -> {image_path} | \"{prompt[:80]}\"")
+    log.info(f"Generating image [{provider}] -> {image_path} | \"{prompt[:80]}\"")
     t = Timer()
 
     try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            resp = await client.post(
-                f"{settings.OLLAMA_BASE_URL}/api/generate",
-                json={
-                    "model": settings.OLLAMA_IMAGE_MODEL,
-                    "prompt": prompt,
-                    "stream": False,
-                },
-            )
-            resp.raise_for_status()
-            result = resp.json()
+        if provider == "openai":
+            image_b64 = await _generate_openai(prompt)
+        else:
+            image_b64 = await _generate_ollama(prompt)
 
-        image_b64 = result.get("image", "")
-        if not image_b64:
-            log.warning(f"Ollama returned empty image for {image_path}")
-            return {
-                "generated_image_parts": [{image_path: _PLACEHOLDER_URI}],
-                "current_step": [f"Image {image_path}: Ollama returned empty response (using placeholder)"],
-            }
+        # Save to disk for persistence
+        _save_image(session_id, image_path, image_b64)
 
-        # Save to disk and get URL
-        url = _save_image(session_id, image_path, image_b64)
+        # Return as data URI so Sandpack can render inline
+        data_uri = f"data:image/png;base64,{image_b64}"
 
         log.info(
             f"Done in {t.elapsed()}s -> {image_path} "
-            f"({len(image_b64) // 1024}KB) saved to disk"
+            f"({len(image_b64) // 1024}KB) [{provider}]"
         )
         return {
-            "generated_image_parts": [{image_path: url}],
+            "generated_image_parts": [{image_path: data_uri}],
             "current_step": [f"Generated image {image_path} ✓"],
         }
 
     except httpx.ConnectError:
-        msg = f"Image {image_path}: Ollama not reachable at {settings.OLLAMA_BASE_URL} (is it running?)"
+        endpoint = "OpenAI API" if provider == "openai" else f"Ollama at {settings.OLLAMA_BASE_URL}"
+        msg = f"Image {image_path}: cannot connect to {endpoint}"
         log.error(msg)
         return {
-            "generated_image_parts": [{image_path: _PLACEHOLDER_URI}],
+            "generated_image_parts": [{image_path: _placeholder_url(image_path)}],
             "current_step": [msg],
         }
 
     except httpx.TimeoutException:
-        msg = f"Image {image_path}: generation timed out (180s)"
+        msg = f"Image {image_path}: generation timed out [{provider}]"
         log.error(msg)
         return {
-            "generated_image_parts": [{image_path: _PLACEHOLDER_URI}],
+            "generated_image_parts": [{image_path: _placeholder_url(image_path)}],
             "current_step": [msg],
         }
 
     except httpx.HTTPStatusError as e:
-        msg = f"Image {image_path}: Ollama HTTP {e.response.status_code}"
-        log.error(f"{msg} — {e.response.text[:200]}")
+        body = e.response.text[:200] if e.response else ""
+        msg = f"Image {image_path}: HTTP {e.response.status_code} [{provider}]"
+        log.error(f"{msg} — {body}")
         return {
-            "generated_image_parts": [{image_path: _PLACEHOLDER_URI}],
+            "generated_image_parts": [{image_path: _placeholder_url(image_path)}],
             "current_step": [msg],
         }
 
     except Exception as e:
-        msg = f"Image {image_path}: unexpected error — {type(e).__name__}: {e}"
+        msg = f"Image {image_path}: {type(e).__name__}: {e}"
         log.error(msg)
         return {
-            "generated_image_parts": [{image_path: _PLACEHOLDER_URI}],
+            "generated_image_parts": [{image_path: _placeholder_url(image_path)}],
             "current_step": [msg],
         }

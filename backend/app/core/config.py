@@ -15,7 +15,7 @@ _default_db = str(Path(__file__).resolve().parent.parent.parent / "data" / "agen
 class Settings(BaseSettings):
     """Central configuration — validated at startup."""
 
-    model_config = {"env_file": str(_env_path), "env_file_encoding": "utf-8"}
+    model_config = {"env_file": str(_env_path), "env_file_encoding": "utf-8", "extra": "ignore"}
 
     # ── LLM ───────────────────────────────────────────────────────
     OPENAI_API_KEY: str = ""
@@ -24,11 +24,23 @@ class Settings(BaseSettings):
     LLM_MODEL_SMALL: str = "gpt-5-mini-2025-08-07"
 
     # ── CORS ──────────────────────────────────────────────────────
-    CORS_ORIGINS: list[str] = ["http://localhost:3000"]
+    CORS_ORIGINS: str = "http://localhost:3000"
 
-    # ── Ollama image generation ───────────────────────────────────
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parse CORS_ORIGINS as comma-separated string or JSON list."""
+        raw = self.CORS_ORIGINS.strip()
+        if raw.startswith("["):
+            import json
+            return json.loads(raw)
+        return [o.strip() for o in raw.split(",") if o.strip()]
+
+    # ── Image generation ─────────────────────────────────────────
+    IMAGE_PROVIDER: str = "openai"  # "openai" or "ollama"
+    IMAGE_MODEL: str = "gpt-image-1"  # OpenAI: gpt-image-1 | Ollama: x/flux2-klein:latest
+    IMAGE_SIZE: str = "1024x1024"  # OpenAI image size
+    IMAGE_QUALITY: str = "medium"  # OpenAI: low, medium, high
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_IMAGE_MODEL: str = "x/flux2-klein:latest"
 
     # ── Redis + Database ──────────────────────────────────────────
     REDIS_URL: str = "redis://localhost:6379/0"

@@ -50,7 +50,7 @@ User types prompt
 |   (gpt-5-mini)       |               (gpt-5.1, parallel)     |
 |                      |                       |                |
 |                      +--- image_generator ---+                |
-|                      |   (Ollama/Flux2)      |                |
+|                      | (OpenAI/Ollama)       |                |
 |                      +-----------------------+                |
 |                              v                                |
 |                          assembler                            |
@@ -186,7 +186,14 @@ The frontend detects Sandpack compilation errors and automatically sends them ba
 
 ### Image Generation
 
-Local image generation via **Ollama** (Flux2 model). Images are saved to disk and served via HTTP — no base64 bloat in generated code.
+Two providers supported — configured via `IMAGE_PROVIDER` in `.env`:
+
+| Provider | Model | Speed | Cost |
+|---|---|---|---|
+| **OpenAI** (default) | `gpt-image-1` | ~10-15s per image | API credits |
+| **Ollama** (local) | Flux2 / any model | ~60-180s per image | Free (local GPU) |
+
+Images are saved to disk for persistence and embedded as inline base64 data URIs in the generated code so they render correctly in Sandpack's browser sandbox.
 
 ---
 
@@ -245,8 +252,11 @@ npm run dev              # http://localhost:3000
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis connection (optional) |
 | `DATABASE_PATH` | `data/agentic.db` | SQLite database path |
 | `IMAGE_STORAGE_PATH` | `data/images` | Generated image storage |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
-| `OLLAMA_IMAGE_MODEL` | `x/flux2-klein:latest` | Image generation model |
+| `IMAGE_PROVIDER` | `openai` | Image generation provider (`openai` or `ollama`) |
+| `IMAGE_MODEL` | `gpt-image-1` | Image model (`gpt-image-1` for OpenAI, model name for Ollama) |
+| `IMAGE_SIZE` | `1024x1024` | OpenAI image size |
+| `IMAGE_QUALITY` | `medium` | OpenAI image quality (`low`, `medium`, `high`) |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL (only if `IMAGE_PROVIDER=ollama`) |
 | `WS_AUTH_KEY` | *(empty)* | Bearer token for API auth (optional) |
 | `LOG_FORMAT` | `dev` | `dev` (colored) or `json` (structured) |
 | `SESSION_CACHE_TTL` | `3600` | Redis session cache TTL in seconds |
@@ -334,7 +344,7 @@ agentic-ui/
 | Backend | FastAPI + Uvicorn, Python 3.13 |
 | Agent Orchestration | LangGraph (parallel `Send` fan-out) |
 | LLM | OpenAI GPT-5.1 / GPT-5-mini via LangChain |
-| Image Generation | Ollama (Flux2) — local, no API costs |
+| Image Generation | OpenAI `gpt-image-1` (default) or Ollama (local) |
 | Cache | Redis 7 (optional, graceful degradation) |
 | Database | SQLite (WAL mode, async via aiosqlite) |
 | CI/CD | GitHub Actions |

@@ -12,7 +12,7 @@ import { useChat } from "@/hooks/useChat";
 export default function ChatPanel() {
   const [input, setInput] = useState("");
   const { sendPrompt, cancel } = useChat();
-  const { messages, agentSteps, isGenerating } = useIDEStore();
+  const { messages, agentSteps, isGenerating, clearSession } = useIDEStore();
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom on new messages/steps
@@ -40,6 +40,16 @@ export default function ChatPanel() {
         <h2 className="text-sm font-semibold text-gray-200 tracking-wide">
           AI Agent Chat
         </h2>
+        <button
+          onClick={clearSession}
+          disabled={isGenerating}
+          className="ml-auto text-[10px] uppercase tracking-wider px-2 py-1
+                     text-gray-400 hover:text-white border border-[#30363d]
+                     hover:border-gray-500 rounded transition-colors
+                     disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          New Session
+        </button>
       </div>
 
       {/* Messages */}
