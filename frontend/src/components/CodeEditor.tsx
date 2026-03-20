@@ -63,6 +63,8 @@ export default function CodeEditor() {
   };
 
   // A file is "changed" when it differs from the previous snapshot
+  const isImage = (path: string) =>
+    files[path]?.startsWith("data:image/") ?? false;
   const isChanged = (path: string) =>
     previousFiles[path] !== undefined && previousFiles[path] !== files[path];
 
@@ -149,6 +151,7 @@ export default function CodeEditor() {
         {filePaths.map((path) => {
           const changed = isChanged(path);
           const isNew = hasDiff && !(path in previousFiles);
+          const imgFile = isImage(path);
           return (
             <button
               key={path}
@@ -160,6 +163,13 @@ export default function CodeEditor() {
                               : "text-gray-500 hover:text-gray-300 hover:bg-[#161b22]"
                           }`}
             >
+              {imgFile && (
+                <svg className="w-3 h-3 text-purple-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <polyline points="21 15 16 10 5 21" />
+                </svg>
+              )}
               {path.split("/").pop()}
               {isNew && (
                 <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" title="New file" />
@@ -175,7 +185,17 @@ export default function CodeEditor() {
       {/* ── Editor area ──────────────────────────────────────── */}
       <div className="flex-1 min-h-0">
         {activeFile && files[activeFile] !== undefined ? (
-          showDiff ? (
+          /* Image preview for data URI files */
+          files[activeFile].startsWith("data:image/") ? (
+            <div className="flex flex-col items-center justify-center h-full bg-[#0d1117] p-6 gap-4">
+              <img
+                src={files[activeFile]}
+                alt={activeFile}
+                className="max-w-full max-h-[80%] rounded-lg border border-[#30363d] shadow-lg object-contain"
+              />
+              <span className="text-xs text-gray-500 font-mono">{activeFile}</span>
+            </div>
+          ) : showDiff ? (
             <>
               {/* Diff header */}
               <div className="flex items-center justify-between px-3 py-1 bg-[#161b22] border-b border-[#21262d] text-[10px] text-gray-500 shrink-0">

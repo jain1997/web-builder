@@ -114,6 +114,9 @@ export default function LivePreview() {
                 "react-icons": "latest",
                 "@headlessui/react": "latest",
                 "recharts": "latest",
+                "three": "latest",
+                "@react-three/fiber": "latest",
+                "@react-three/drei": "latest",
               },
             }}
           >

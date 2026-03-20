@@ -7,7 +7,15 @@ export async function downloadAsZip(
   const zip = new JSZip();
 
   for (const [path, content] of Object.entries(files)) {
-    zip.file(path, content);
+    if (content.startsWith("data:image/")) {
+      // Image data URI — decode to binary PNG in the ZIP
+      const base64 = content.split(",")[1];
+      if (base64) {
+        zip.file(path, base64, { base64: true });
+      }
+    } else {
+      zip.file(path, content);
+    }
   }
 
   const blob = await zip.generateAsync({ type: "blob" });

@@ -1,16 +1,18 @@
 /**
- * useChat Hook — WebSocket connection to the backend agent pipeline.
+ * useChat Hook — SSE streaming connection to the backend agent pipeline.
  *
- * Handles sending prompts, receiving streamed status updates,
- * and processing generated files from the backend.
+ * Uses fetch() + ReadableStream to consume Server-Sent Events from
+ * POST /v1/generate. No WebSocket needed — simpler, works through
+ * CDNs/proxies, and supports standard HTTP auth.
  */
 
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
 import { useIDEStore } from "@/lib/store";
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const AUTH_TOKEN = process.env.NEXT_PUBLIC_AUTH_TOKEN || "";
 
 /** Returns a stable session ID stored in localStorage — created once per browser. */
 function getSessionId(): string {
@@ -23,8 +25,35 @@ function getSessionId(): string {
   return id;
 }
 
+/** Parse SSE text stream into individual events. */
+function parseSSE(chunk: string): Array<{ event: string; data: string }> {
+  const events: Array<{ event: string; data: string }> = [];
+  const blocks = chunk.split("\n\n").filter(Boolean);
+
+  for (const block of blocks) {
+    let event = "message";
+    let data = "";
+
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event: ")) {
+        event = line.slice(7).trim();
+      } else if (line.startsWith("data: ")) {
+        data += line.slice(6);
+      } else if (line.startsWith("data:")) {
+        data += line.slice(5);
+      }
+    }
+
+    if (data) {
+      events.push({ event, data });
+    }
+  }
+
+  return events;
+}
+
 export function useChat() {
-  const wsRef = useRef<WebSocket | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const {
     addMessage,
     addAgentStep,
@@ -35,129 +64,166 @@ export function useChat() {
     setPreviousFiles,
   } = useIDEStore();
 
-  // Establish WebSocket connection with auto-reconnect
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const reconnectDelayRef = useRef(1000); // Start with 1s
-
-  const connect = useCallback(() => {
-    console.log(`[WS] Connecting to ${WS_URL}...`);
-    const ws = new WebSocket(`${WS_URL}/ws/chat`);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      console.log("[WS] Connected");
-      reconnectDelayRef.current = 1000; // Reset delay on success
-      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-    };
-
-    ws.onmessage = (event) => {
-      let data;
-      try {
-        data = JSON.parse(event.data);
-      } catch (err) {
-        console.error("[WS] Malformed JSON received:", event.data);
-        return;
-      }
-
-      switch (data.type) {
-        case "status":
-          if (data.node) setGenerating(data.node);
-          if (data.files) setFiles(data.files);
-          addAgentStep({ node: data.node || "system", step: data.step });
-          break;
-
-        case "result":
-          // Backend may assign a new session ID for fresh projects
-          if (data.session_id) {
-            localStorage.setItem("agentic_session_id", data.session_id);
-          }
-          if (data.files && Object.keys(data.files).length > 0) {
-            // Full replace — backend sends all files that should be active.
-            // Merging keeps stale/broken files from prior generations in Sandpack.
-            setFiles(data.files);
-            addMessage({
-              role: "assistant",
-              content: `Generated ${Object.keys(data.files).length} file(s).`,
-            });
-          }
-          addAgentStep({ node: "system", step: data.step || "Done" });
-          setGenerating(false);
-          break;
-
-        case "error":
-          addMessage({ role: "system", content: `Error: ${data.message}` });
-          setGenerating(false);
-          break;
-      }
-    };
-
-    ws.onclose = (e) => {
-      console.log(`[WS] Disconnected (code: ${e.code}). Reconnecting in ${reconnectDelayRef.current}ms...`);
-      wsRef.current = null;
-      setGenerating(false);
-      
-      // Exponential backoff
-      reconnectTimeoutRef.current = setTimeout(() => {
-        reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000); // Cap at 30s
-        connect();
-      }, reconnectDelayRef.current);
-    };
-
-    ws.onerror = (err) => {
-      console.error("[WS] Socket error:", err);
-      ws.close();
-    };
-  }, [addMessage, addAgentStep, setFiles, setGenerating]);
-
-  useEffect(() => {
-    connect();
-    return () => {
-      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-      wsRef.current?.close();
-    };
-  }, [connect]);
-
-  // Send a prompt to the backend
   const sendPrompt = useCallback(
-    (prompt: string) => {
-      const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        addMessage({
-          role: "system",
-          content: "Not connected to backend. Please wait…",
-        });
-        return;
+    async (prompt: string) => {
+      // Abort any in-flight request
+      if (abortRef.current) {
+        abortRef.current.abort();
       }
 
-      // Capture errors BEFORE clearing — reading state after setCompilationErrors([])
-      // returns an empty array, so errors must be snapshotted first.
+      // Capture errors BEFORE clearing
       const errorsToSend = useIDEStore.getState().compilationErrors;
 
-      // Snapshot current files for diff view before overwriting with new generation
+      // Snapshot current files for diff view
       setPreviousFiles(useIDEStore.getState().files);
 
-      // Add user message to chat
+      // Update UI state
       addMessage({ role: "user", content: prompt });
       clearAgentSteps();
-      setCompilationErrors([]);  // clear so auto-fix doesn't re-trigger
+      setCompilationErrors([]);
       setGenerating(true);
 
-      // Send to backend
-      ws.send(
-        JSON.stringify({
-          prompt,
-          session_id: getSessionId(),
-          files: useIDEStore.getState().files,
-          errors: errorsToSend,   // snapshot taken before clearing
-          history: useIDEStore.getState().messages.map(m => ({
-            role: m.role,
-            content: m.content
-          })),
-        })
-      );
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (AUTH_TOKEN) {
+        headers["Authorization"] = `Bearer ${AUTH_TOKEN}`;
+      }
+
+      try {
+        const response = await fetch(`${API_URL}/v1/generate`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            prompt,
+            session_id: getSessionId(),
+            files: useIDEStore.getState().files,
+            errors: errorsToSend,
+            history: useIDEStore.getState().messages.map((m) => ({
+              role: m.role,
+              content: m.content,
+            })),
+          }),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.detail || `Server error: ${response.status}`);
+        }
+
+        if (!response.body) {
+          throw new Error("No response body — SSE streaming not supported");
+        }
+
+        // Read the SSE stream
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // Split on double newline (SSE event boundary)
+          const parts = buffer.split("\n\n");
+          // Keep the last partial chunk in the buffer
+          buffer = parts.pop() || "";
+
+          for (const part of parts) {
+            const events = parseSSE(part + "\n\n");
+
+            for (const { event, data } of events) {
+              // Skip keep-alive pings
+              if (event === "ping" || !data.trim()) continue;
+
+              let parsed;
+              try {
+                parsed = JSON.parse(data);
+              } catch {
+                continue;
+              }
+
+              switch (event) {
+                case "status":
+                  if (parsed.node) setGenerating(parsed.node);
+                  if (parsed.files) setFiles(parsed.files);
+                  addAgentStep({
+                    node: parsed.node || "system",
+                    step: parsed.step,
+                  });
+                  break;
+
+                case "result":
+                  if (parsed.session_id) {
+                    localStorage.setItem("agentic_session_id", parsed.session_id);
+                  }
+                  if (parsed.files && Object.keys(parsed.files).length > 0) {
+                    setFiles(parsed.files);
+                    addMessage({
+                      role: "assistant",
+                      content: `Generated ${Object.keys(parsed.files).length} file(s).`,
+                    });
+                  }
+                  addAgentStep({
+                    node: "system",
+                    step: parsed.step || "Done",
+                  });
+                  setGenerating(false);
+                  break;
+
+                case "error":
+                  addMessage({
+                    role: "system",
+                    content: `Error: ${parsed.message}`,
+                  });
+                  setGenerating(false);
+                  break;
+              }
+            }
+          }
+        }
+
+        // Stream finished — ensure generating is off
+        setGenerating(false);
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === "AbortError") {
+          // User cancelled — not an error
+          return;
+        }
+
+        const message = err instanceof Error ? err.message : "Unknown error";
+        addMessage({ role: "system", content: `Connection error: ${message}` });
+        setGenerating(false);
+      } finally {
+        abortRef.current = null;
+      }
     },
-    [addMessage, clearAgentSteps, setGenerating, setCompilationErrors, setPreviousFiles]
+    [
+      addMessage,
+      addAgentStep,
+      clearAgentSteps,
+      setFiles,
+      setGenerating,
+      setCompilationErrors,
+      setPreviousFiles,
+    ],
   );
 
-  return { sendPrompt };
+  /** Cancel any in-flight generation. */
+  const cancel = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+      setGenerating(false);
+      addMessage({ role: "system", content: "Generation cancelled." });
+    }
+  }, [setGenerating, addMessage]);
+
+  return { sendPrompt, cancel };
 }

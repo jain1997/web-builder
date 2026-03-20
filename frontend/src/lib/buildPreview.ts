@@ -160,6 +160,43 @@ var __externals = {
         }, String(key) + " chart");
       };
     }
+  }),
+
+  // three / @react-three/fiber / @react-three/drei — 3D needs real WebGL,
+  // so in the new-tab blob preview we show a placeholder instead of crashing.
+  "three": new Proxy({ __esModule: true, default: {} }, {
+    get: function(target, key) {
+      if (key === "__esModule") return true;
+      if (key === "default") return {};
+      return function ThreeStub() {};
+    }
+  }),
+  "@react-three/fiber": {
+    __esModule: true,
+    Canvas: function CanvasFallback(props) {
+      return React.createElement("div", {
+        style: { background: "linear-gradient(135deg, #1a1a2e, #16213e)", border: "1px dashed #4a5568",
+                 borderRadius: "0.75rem", padding: "2rem", textAlign: "center", color: "#a0aec0",
+                 minHeight: "300px", display: "flex", flexDirection: "column",
+                 alignItems: "center", justifyContent: "center", gap: "0.5rem" }
+      },
+        React.createElement("div", { style: { fontSize: "2rem" } }, "\uD83C\uDFB2"),
+        React.createElement("div", { style: { fontWeight: 600, color: "#e2e8f0" } }, "3D Scene"),
+        React.createElement("div", { style: { fontSize: "0.75rem" } },
+          "3D rendering is available in the Sandpack preview. Open the IDE to interact with this scene.")
+      );
+    },
+    useFrame: function() {},
+    useThree: function() { return { gl: {}, scene: {}, camera: {}, size: { width: 800, height: 600 } }; },
+    useLoader: function() { return {}; },
+    default: {}
+  },
+  "@react-three/drei": new Proxy({ __esModule: true }, {
+    get: function(target, key) {
+      if (key === "__esModule") return true;
+      // OrbitControls, Text, etc. — render nothing
+      return function DreiStub(props) { return (props && props.children) || null; };
+    }
   })
 };
 `;
@@ -248,9 +285,20 @@ export async function openPreviewInNewTab(
     return;
   }
 
-  // ── Transpile to CommonJS ────────────────────────────────────────────────────
+  // ── Separate code files from image data URIs ────────────────────────────────
+  const codeFiles: Record<string, string> = {};
+  const imageFiles: Record<string, string> = {};
+  for (const [path, content] of Object.entries(files)) {
+    if (content.startsWith("data:image/")) {
+      imageFiles[path] = content;
+    } else {
+      codeFiles[path] = content;
+    }
+  }
+
+  // ── Transpile code to CommonJS (skip images) ──────────────────────────────
   const compiled: Record<string, string> = {};
-  for (const [path, code] of Object.entries(files)) {
+  for (const [path, code] of Object.entries(codeFiles)) {
     try {
       compiled[path] = Babel.transform(code, {
         presets: [
@@ -261,6 +309,7 @@ export async function openPreviewInNewTab(
           ["env", { modules: "commonjs", targets: { browsers: ["last 2 Chrome versions"] } }],
         ],
         filename: path,
+        compact: false, // prevent deopt warnings on large files with inlined base64 images
       }).code;
     } catch (err: any) {
       console.warn(`[buildPreview] transpile failed for ${path}:`, err);
