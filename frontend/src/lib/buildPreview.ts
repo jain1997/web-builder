@@ -253,10 +253,11 @@ export async function openPreviewInNewTab(
       }
 
       compiled[path] = result;
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.warn(`[buildPreview] transpile failed for ${path}:`, err);
+      const msg = err instanceof Error ? err.message : String(err);
       compiled[path] =
-        `exports.default = function() { return React.createElement("div", {style:{color:"#c00",background:"#fee",padding:"20px",fontFamily:"monospace",whiteSpace:"pre-wrap"}}, "Compile error in ${path}:\\n" + ${JSON.stringify(err.message ?? String(err))}); };`;
+        `exports.default = function() { return React.createElement("div", {style:{color:"#c00",background:"#fee",padding:"20px",fontFamily:"monospace",whiteSpace:"pre-wrap"}}, "Compile error in ${path}:\\n" + ${JSON.stringify(msg)}); };`;
     }
   }
 

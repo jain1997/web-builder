@@ -1,9 +1,16 @@
 import asyncio
 import os
 import json
+import pytest
 from app.agents.graph import agent_graph
 from langchain_core.messages import HumanMessage
 
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.getenv("OPENAI_API_KEY", "").startswith("sk-test"),
+    reason="Skipped in CI — requires real OpenAI API key",
+)
 async def test_graph():
     print("Testing LangGraph Pipeline...")
     

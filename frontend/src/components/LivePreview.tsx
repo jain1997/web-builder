@@ -23,7 +23,8 @@ function SandpackErrorWatcher() {
   const setCompilationErrors = useIDEStore((s) => s.setCompilationErrors);
 
   useEffect(() => {
-    return listen((msg: any) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return listen((msg: Record<string, any>) => {
       // Only capture errors — never clear on "start" here.
       // Clearing on every bundler "start" event causes rapid set/clear cycles
       // that make the error overlay blink. Errors are cleared in sendPrompt
